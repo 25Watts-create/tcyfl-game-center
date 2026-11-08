@@ -3,7 +3,7 @@ name: Update TCYFL data
 
 on:
   schedule:
-    - cron: "*/30 * * * 6,0"   # every 30 minutes (GitHub may run it a few minutes late)
+    - cron: "0 * * * 6,0"   # every 60 minutes (GitHub may run it a few minutes late)
   workflow_dispatch:          # lets you run it by hand from the Actions tab
 
 permissions:
