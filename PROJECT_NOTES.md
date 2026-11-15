@@ -3,7 +3,7 @@
 Working notes for the tcyfl.net scraper and the Game Center page it builds.
 Read this before changing the scraper or the Playoffs tab.
 
-_Last updated: 2026-11-08 (Playoffs tab rebuilt from the league's Seeds & Scores bracket; MAC10 excluded)._
+_Last updated: 2026-11-15 (Fixed noise commits with deep data-diff check; shifted scheduled scrape window to Sat 2 PM – Mon 2 PM CT)._
 
 ---
 
@@ -16,7 +16,7 @@ A single Python script (`tcyfl_scraper.py`) that:
 3. Writes `tcyfl-data.json` (the raw scraped data).
 4. Writes `tcyfl.html`, a self-contained page with the JSON embedded and all CSS/JS inline. No build step and no external requests.
 
-A GitHub Action runs it every 30 minutes on weekends and commits the output to `docs/`, which is served as a static site (GitHub Pages).
+A GitHub Action runs hourly on game weekends (Saturday 2:00 PM CT to Monday 2:00 PM CT) and commits the output to `docs/`, which is served as a static site (GitHub Pages).
 
 ```
 tcyfl.net ──(requests + BeautifulSoup)──▶ tcyfl_scraper.py
@@ -182,13 +182,35 @@ Plain JS, no framework. Hash routing: `#d.<divisionId>.<view>[.<teamSlug>]`, whe
 
 ## 7. Automation (`.github/workflows/update.yml`)
 
-- Cron `*/30 * * * 6,0`: every 30 min on Saturday and Sunday, **UTC**.
-- Runs the scraper, copies `tcyfl.html` → `index.html`, commits if `docs/` changed. `concurrency` stops overlapping runs.
+- **Schedule window**: Runs hourly from **Saturday 2:00 PM to Monday 2:00 PM US Central Time**.
+  - GitHub Actions schedules run in UTC, while Chicagoland games and score postings follow Central Time:
+    - Central Daylight Time (CDT, UTC-5): late March to early November.
+    - Central Standard Time (CST, UTC-6): early November to mid-March.
+  - Three cron entries combine to form the window:
+    - `0 19-23 * * 6`: Saturday 19:00–23:00 UTC (2:00 PM CDT / 1:00 PM CST through Saturday evening).
+    - `0 * * * 0`: Sunday all 24 hours UTC (covers Sunday games, late-night game scores, and overtime results).
+    - `0 0-20 * * 1`: Monday 00:00–20:00 UTC (Sunday night CT through 2:00 PM CST / 3:00 PM CDT Monday).
+  - *Why this window?* Games kick off Saturday morning with initial scores posted by 1:00–2:00 PM CT. Sunday games run all day, and late Sunday scores, Monday morning makeup reports, and playoff bracket updates are posted by early Monday afternoon. Running mid-week is avoided since games are not held between Monday afternoon and Saturday morning.
+  - *Frequency*: Set to hourly (`0`). If 30-minute intervals are ever desired, change the leading `0` to `*/30`.
+  - Manual triggers remain enabled via `workflow_dispatch` on the Actions tab.
+- **Noise commit prevention**:
+  - Previously, each run created a noise commit (~48 per weekend) because `data["generated"]` was stamped with the current time regardless of whether league data changed.
+  - The scraper now normalizes and deep-compares newly scraped division data against `docs/tcyfl-data.json`.
+  - If no games, scores, standings, or bracket seeds changed, it retains the existing `generated` timestamp and skips re-writing unchanged files on disk.
+  - Because file bytes are unchanged, `git diff --cached --quiet` detects no modifications, outputs `No changes to commit`, and skips committing.
+  - If you need to force a write and bump the timestamp even when data is unchanged, pass `--force`:
+    ```bash
+    python3 tcyfl_scraper.py --out docs --force
+    ```
 - The Action runs on GitHub's servers, so it reaches tcyfl.net regardless of cloud-session network settings.
 
 ---
 
 ## 8. Known issues and ideas
+
+Fixed in the 2026-11-15 update:
+- ✅ **Every scheduled run commits even when nothing changed**: Resolved. Scraper normalizes and compares newly scraped division data against existing JSON. If unchanged, the previous `generated` timestamp is preserved and files are not overwritten. Git detects zero diffs and GitHub Actions skips empty commits. Use `--force` to override.
+- ✅ **Schedule window shifted to Sat 2 PM – Mon 2 PM CT**: Resolved. Cron schedule shifted from rigid UTC Sat/Sun (which cut off at ~6-7 PM CT Sunday) to Saturday 2:00 PM CT through Monday 2:00 PM CT (`0 19-23 * * 6`, `0 * * * 0`, `0 0-20 * * 1`), ensuring late Sunday evening games and Monday morning bracket updates are captured without redundant mid-week runs.
 
 Fixed in the 2026-11-08 update:
 - ✅ PAC10 names mismatched between games and standings (PF/PA showed 0, projection ranked everyone 0-0, duplicate teams).
@@ -200,8 +222,6 @@ Fixed in the 2026-11-08 update:
 - ✅ MAC10 removed.
 
 Still open:
-- 🟡 **Every scheduled run commits even when nothing changed**: `generated` changes each run. About 48 noise commits per weekend. Fix: skip writing when the JSON minus `generated` is unchanged.
-- 🟡 **Schedule window**: UTC Sat/Sun only. Late Sunday games (after ~7 PM CT) and weekday makeups wait until the next Saturday. Consider a Monday early-UTC run, or use `workflow_dispatch`.
 - 🟡 **7-Man** scrapes to nothing (its page links per-grade sub-divisions). Either parse those or drop it from the dropdown.
 - 🟡 **PAC10 Flyweight** shows only format text: no bracket is drawn and no bowl games are posted.
 - 🟡 Bracket ↔ schedule matching assumes `Week N` == round N. If the league ever adds a playoff week with no bracket round, matching shifts. `link_playoffs` is the place to fix that.

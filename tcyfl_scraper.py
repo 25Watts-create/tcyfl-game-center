@@ -394,6 +394,7 @@ def main():
     ap.add_argument("--out", default=".", help="output folder (default: current folder)")
     ap.add_argument("--only", nargs="*", help="division ids to refresh, e.g. big10-varsity")
     ap.add_argument("--list", action="store_true", help="list divisions and exit")
+    ap.add_argument("--force", action="store_true", help="write output even if data hasn't changed")
     args = ap.parse_args()
 
     divs = discover()
@@ -404,10 +405,13 @@ def main():
     out = Path(args.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     jp = out / "tcyfl-data.json"
+    html_p = out / "tcyfl.html"
     old = {}
+    old_data = None
     if jp.exists():
         try:
-            old = {d["id"]: d for d in json.loads(jp.read_text())["divisions"]}
+            old_data = json.loads(jp.read_text(encoding="utf-8"))
+            old = {d["id"]: d for d in old_data["divisions"]}
         except Exception:
             pass
     result = {}
@@ -426,11 +430,37 @@ def main():
             print(f"WARN  {d['id']}: {e}" + (" (kept previous data)" if d["id"] in old else ""), file=sys.stderr)
             if d["id"] in old:
                 result[d["id"]] = old[d["id"]]
-    data = {"generated": datetime.datetime.now().astimezone().isoformat(timespec="minutes"), "divisions": list(result.values())}
-    jp.write_text(json.dumps(data, separators=(",", ":")))
-    blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
-    (out / "tcyfl.html").write_text(TEMPLATE.replace("__DATA__", blob), encoding="utf-8")
-    print(f"wrote {out / 'tcyfl.html'}")
+
+    # Check if scraped division data changed (ignoring generated timestamp)
+    unchanged = False
+    if not args.force and old and old_data and jp.exists() and html_p.exists():
+        try:
+            old_norm = json.loads(json.dumps(old))
+            new_norm = json.loads(json.dumps(result))
+            if old_norm == new_norm:
+                unchanged = True
+        except Exception:
+            pass
+
+    if unchanged:
+        print("ok    data unchanged; keeping previous generated timestamp")
+        gen_time = old_data.get("generated", datetime.datetime.now().astimezone().isoformat(timespec="minutes"))
+        divisions = old_data.get("divisions", list(result.values()))
+    else:
+        gen_time = datetime.datetime.now().astimezone().isoformat(timespec="minutes")
+        divisions = list(result.values())
+
+    data = {"generated": gen_time, "divisions": divisions}
+    new_json = json.dumps(data, separators=(",", ":"))
+    if not jp.exists() or jp.read_text(encoding="utf-8") != new_json:
+        jp.write_text(new_json, encoding="utf-8")
+        print(f"wrote {jp}")
+
+    blob = new_json.replace("</", "<\\/")
+    new_html = TEMPLATE.replace("__DATA__", blob)
+    if not html_p.exists() or html_p.read_text(encoding="utf-8") != new_html:
+        html_p.write_text(new_html, encoding="utf-8")
+        print(f"wrote {html_p}")
 
 
 TEMPLATE = r'''<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>TCYFL Game Center</title>
